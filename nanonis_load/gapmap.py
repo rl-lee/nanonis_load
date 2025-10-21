@@ -230,6 +230,7 @@ class Gapmap:
         interp_rescale: bool = True,
         total_filling_factor : bool = False,
         top_filling_factor : bool = False,
+        rasterized: bool = True,
     ) -> Tuple[plt.Figure, plt.Axes]:
         """
         Create a pcolormesh gap map like in your notebook.
@@ -257,18 +258,18 @@ class Gapmap:
 
         if total_filling_factor == True :
             total, delta, _, _, _, _ = self.filling_factor_convert(self.v_g_2d, self.v_m_2d)
-            pcm = ax.pcolormesh(total, delta, Z , shading=shading, cmap=cmap, vmin=vmin, vmax=vmax)
+            pcm = ax.pcolormesh(total, delta, Z , shading=shading, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=rasterized)
             xlabel = "Total filling factor"
             ylabel = r"$\Delta \nu$"
 
         elif top_filling_factor == True :
             _, _, v_t, v_m, _, _ = self.filling_factor_convert(self.v_g_2d, self.v_m_2d)
-            pcm = ax.pcolormesh(v_t, v_m, Z , shading=shading, cmap=cmap, vmin=vmin, vmax=vmax)
+            pcm = ax.pcolormesh(v_t, v_m, Z , shading=shading, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=rasterized)
             xlabel = r"$\nu top$"
             ylabel = r"$\nu middle$"
 
         else :
-            pcm = ax.pcolormesh(sorted(uniq_Vg), sorted(uniq_Vm_mV), Z , shading=shading, cmap=cmap, vmin=vmin, vmax=vmax)
+            pcm = ax.pcolormesh(sorted(uniq_Vg), sorted(uniq_Vm_mV), Z , shading=shading, cmap=cmap, vmin=vmin, vmax=vmax, rasterized=rasterized)
 
         cbar = fig.colorbar(pcm, ax=ax) if colorbar else None
 
@@ -320,5 +321,95 @@ class Gapmap:
         if cbar is not None:
             cbar.set_label("Current (A)")
 
+
+        return fig, ax
+    
+
+
+
+    def plot_bias_index(
+        self,
+        bias_index: int,
+        fig: Optional[plt.Figure] = None,
+        ax: Optional[plt.Axes] = None,
+        vmin: Optional[float] = None,
+        vmax: Optional[float] = None,
+        gradient: bool = True,
+        cmap: str = "RdBu_r",
+        xlabel: str = "$V_g$ (V)",
+        ylabel: str = "$V_m$ (V)",
+        auto_clim: bool = True,
+        rasterized: bool = False,
+        show_colorbar: bool = True,
+
+    ) -> Tuple[plt.Figure, plt.Axes]:
+        """
+        Plot a single bias slice (indexed by bias_index) and return (fig, ax).
+
+        Parameters
+        ----------
+        bias_index : int
+            Index into self.biases (supports negative indexing).
+        rasterized : bool
+            If True, pass rasterized=True to pcolormesh (useful for vector exports).
+        """
+        # validate index (support negative indexing)
+        n_biases = len(self.biases)
+        if not (-n_biases <= bias_index < n_biases):
+            raise IndexError(f"bias_index {bias_index} out of range (len={n_biases})")
+        # normalize to positive index
+        idx = bias_index if bias_index >= 0 else n_biases + bias_index
+        bias_value = float(self.biases[idx])
+
+        # prepare figure / axes
+        if ax is None:
+            fig, ax = plt.subplots() if fig is None else (fig, fig.add_subplot(111))
+        else:
+            # ax provided; if fig is None try to get fig from ax
+            if fig is None:
+                fig = ax.figure
+
+        # compute slice and reshape as in your original code
+        bias_slice = self.compute_bias_slice_interpolation(bias_value, gradient=gradient)
+        bias_slice = np.asarray(bias_slice).reshape((-1, len(self.unique_V_g)))
+
+        # determine clim
+        if auto_clim:
+            valid = bias_slice[~np.isnan(bias_slice)]
+            if valid.size == 0:
+                clim_vmin, clim_vmax = 0.0, 1.0
+            else:
+                clim_vmin = np.quantile(valid, 0.01)
+                clim_vmax = np.quantile(valid, 0.99)
+            vmin_use = clim_vmin if vmin is None else vmin
+            vmax_use = clim_vmax if vmax is None else vmax
+        else:
+            vmin_use, vmax_use = vmin, vmax
+
+        # ensure x,y are sorted (match reshape)
+        x = np.array(sorted(self.unique_V_g))
+        y = np.array(sorted(self.unique_V_m))
+
+        pcm = ax.pcolormesh(
+            x,
+            y,
+            bias_slice,
+            shading="auto",
+            cmap=cmap,
+            vmin=vmin_use,
+            vmax=vmax_use,
+            rasterized=rasterized,
+        )
+
+        cbar = None
+        if show_colorbar:
+            cbar = fig.colorbar(pcm, ax=ax)
+            if cbar is not None:
+                cbar.set_label("Current (A)")
+
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.xaxis.label.set_size(12)
+        ax.yaxis.label.set_size(12)
 
         return fig, ax
