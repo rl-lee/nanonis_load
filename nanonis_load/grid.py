@@ -10,6 +10,7 @@ import numpy as np
 import scipy.ndimage
 import scipy.optimize
 import scipy.signal
+import matplotlib.gridspec as gridspec
 
 from .util import copy_text_to_clipboard
 
@@ -380,7 +381,10 @@ class Grid:
         colorstd=3,
         exclude_range=2,
         linecut_cmap="RdYlBu_r",
-    ):
+        color = 'Blues_r',
+        diff = False):
+
+        self.diff = diff
         """
         Creates the plot layout and initializes the display.
 
@@ -456,6 +460,7 @@ class Grid:
             origin="lower",
             interpolation="nearest",
             aspect="equal",
+            cmap =color
         )
         self.colorbar = self.fig.colorbar(
             self.im, ax=self.plot_ax, label=self.channel, shrink=0.8
@@ -523,7 +528,7 @@ class Grid:
                 zorder=10,
                 edgecolors="black",
                 facecolors="none",
-                visible=True,
+                visible=True                
             )
 
         # --- Connect Event Handlers ---
@@ -545,8 +550,8 @@ class Grid:
             self.mode
         )  # Ensure correct plots are cleared/titled initially
 
-        plt.show()
-
+        return self.fig, self.plot_ax, self.linecut_ax, self.spectrum_ax
+    
     def _calculate_fft(self, data_slice):  # (Unchanged)
         if not np.all(np.isfinite(data_slice)):
             data_slice = np.nan_to_num(data_slice)
@@ -647,6 +652,9 @@ class Grid:
                 px, py = point
                 if 0 <= px < self.x_pixels and 0 <= py < self.y_pixels:
                     point_spectrum = self.data[self.channel][py, px, :]
+                    if self.diff == True :
+                        point_spectrum = np.gradient(point_spectrum)
+                        
                     if np.all(np.isfinite(point_spectrum)):
                         color_index = i % num_preset_colors
                         color = self.preset_colors[color_index]
@@ -954,6 +962,93 @@ class Grid:
         ax.plot(self.biases, self.data[channel][i, j, :])
 
         return fig, ax
+
+
+    def get_gap_size(
+        self,
+        channel: str = "Current (A)",
+        current_threshold=1e-12,
+        gaussian_filter_order = 0
+    ) -> float:
+
+        from scipy.ndimage import gaussian_filter1d
+
+        bias = self.biases
+        lower_biases = np.zeros((self.y_pixels, self.x_pixels))
+        upper_biases = np.zeros((self.y_pixels, self.x_pixels))
+
+        def _linear_interpolate_x_for_y(x0, y0, x1, y1, y_target):
+            if y1 == y0:
+                return x0
+            return x0 + (y_target - y0) * (x1 - x0) / (y1 - y0)
+
+        def bias_at_cross(pair, threshold_value):
+            i0, i1 = pair
+            if i0 == i1:
+                return bias[i0]
+            
+            y0 = current[i0]
+            y1 = current[i1]
+            x0 = bias[i0]
+            x1 = bias[i1]
+            
+            if y0 == y1:
+                return 0.5 * (x0 + x1)
+            try:
+                return _linear_interpolate_x_for_y(x0, y0, x1, y1, threshold_value)
+            except Exception:
+                return 0.5 * (x0 + x1)
+
+        # Main Loop
+        for i in range(self.data[channel].shape[0]):
+            for j in range(self.data[channel].shape[1]):
+                current = self.data[channel][i, j, :]
+                n_points = len(current) # Get the length of the spectral axis
+
+                if gaussian_filter_order > 0: 
+                    current = gaussian_filter1d(current, sigma=gaussian_filter_order, mode='nearest')    
+
+                # --- Lower Bound Logic ---
+                lower_threshold_indices = np.where(current < -current_threshold)[0]
+                
+                if np.any(lower_threshold_indices):
+                    lower_threshold_index0 = lower_threshold_indices.max()
+                    
+                    # FIX: Check if we are at the last element
+                    if lower_threshold_index0 < n_points - 1:
+                        lower_idx = (lower_threshold_index0, lower_threshold_index0 + 1)
+                    else:
+                        # Cannot interpolate forward if we are at the end
+                        lower_idx = (lower_threshold_index0, lower_threshold_index0)
+                else:
+                    lower_threshold_index0 = 0
+                    lower_idx = (lower_threshold_index0, lower_threshold_index0)
+                
+                # --- Upper Bound Logic ---
+                upper_threshold_indices = np.where(current > current_threshold)[0]
+                
+                if np.any(upper_threshold_indices) and len(upper_threshold_indices) > 1:
+                    upper_threshold_index0 = upper_threshold_indices.min()
+                    
+                    # FIX: Check if we are at the last element (unlikely for min(), but safer)
+                    if upper_threshold_index0 < n_points - 1:
+                        upper_idx = (upper_threshold_index0, upper_threshold_index0 + 1)
+                    else:
+                        upper_idx = (upper_threshold_index0, upper_threshold_index0)
+                else:
+                    # FIX: Use n_points - 1, not len(self.data) - 1
+                    upper_threshold_index0 = n_points - 1
+                    upper_idx = (upper_threshold_index0, upper_threshold_index0)
+                
+                lower_bias = bias_at_cross(lower_idx, -current_threshold)
+                upper_bias = bias_at_cross(upper_idx, current_threshold)
+
+                lower_biases[i,j] = lower_bias
+                upper_biases[i,j] = upper_bias
+
+        return lower_biases, upper_biases
+
+
 
     def extract_peak_energies(
         self,
