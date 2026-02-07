@@ -382,6 +382,7 @@ class Grid:
         exclude_range=2,
         linecut_cmap="RdYlBu_r",
         color = 'Blues_r',
+        origin = 'lower',
         diff = False):
 
         self.diff = diff
@@ -457,7 +458,7 @@ class Grid:
             extent=(0, self.x_size, 0, self.y_size),
             vmin=vmin,
             vmax=vmax,
-            origin="lower",
+            origin=origin,
             interpolation="nearest",
             aspect="equal",
             cmap =color
@@ -705,6 +706,54 @@ class Grid:
 
         if self.fig and self.fig.canvas:
             self.fig.canvas.draw_idle()
+
+    def get_linecut_data(self) : 
+
+        xydata = self.linecut_line.get_xydata()
+        x_start, y_start = xydata[0]
+        x_end, y_end = xydata[1]
+
+        # Avoid calculation if line has zero length
+        if np.allclose(xydata[0], xydata[1]):
+            # Optionally clear the plot or show a message
+            dummy_data = np.full((len(self.biases), 1), np.nan)
+            self.linecut_plot.set_data(dummy_data)
+            self.linecut_plot.set_extent((0, 0.1, self.biases.min(), self.biases.max()))
+            self.linecut_ax.set_title("Linecut (zero length)")
+            if self.fig and self.fig.canvas:
+                self.fig.canvas.draw_idle()
+            return
+
+        # Convert data coordinates to pixel indices
+        px_start = x_start / self.x_size * self.x_pixels
+        py_start = y_start / self.y_size * self.y_pixels
+        px_end = x_end / self.x_size * self.x_pixels
+        py_end = y_end / self.y_size * self.y_pixels
+
+        # Number of points along the line (based on pixel distance)
+        num_pts = max(2, int(np.hypot(px_end - px_start, py_end - py_start) + 1))
+
+        # Generate pixel coordinates along the line
+        px_coords = np.linspace(px_start, px_end, num_pts)
+        py_coords = np.linspace(py_start, py_end, num_pts)
+
+        # Clip coordinates to be within valid pixel range (important!)
+        px_coords = np.clip(px_coords, 0, self.x_pixels - 1)
+        py_coords = np.clip(py_coords, 0, self.y_pixels - 1)
+
+        # Extract data along the line using integer indexing (nearest neighbor)
+        # Note: scipy.ndimage.map_coordinates could do interpolation if needed
+        data_cut = self.data[self.channel][
+            py_coords.astype(int), px_coords.astype(int), :
+        ]
+
+        # Transpose to have distance along x-axis, bias along y-axis for imshow
+        data_cut = data_cut.T  # Shape: (num_bias_points, num_pts)
+
+        # Determine line length in data units (nm)
+        length = np.hypot(x_end - x_start, y_end - y_start)
+
+        return px_coords, py_coords, data_cut, length
 
     def _update_linecut_plot(self):
         """Calculates and displays the linecut data."""
@@ -968,10 +1017,11 @@ class Grid:
         self,
         channel: str = "Current (A)",
         current_threshold=1e-12,
-        gaussian_filter_order = 0
+        gaussian_filter_order = 0,
     ) -> float:
 
         from scipy.ndimage import gaussian_filter1d
+        from nanonis_load import sxm
 
         bias = self.biases
         lower_biases = np.zeros((self.y_pixels, self.x_pixels))
