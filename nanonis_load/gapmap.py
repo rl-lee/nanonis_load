@@ -90,9 +90,9 @@ class Gapmap:
             )
             < height_threshold
             if height_threshold is not None
-            else True
+            else [True] * len(self.spectra)
         )
-        self.spectra = list(np.array(self.spectra)[height_filter])
+        self.spectra = np.array(self.spectra)[height_filter].tolist()
 
         # Precompute arrays used for mapping (mirrors your notebook workflow)
         self._compute_basic_arrays()
